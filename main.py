@@ -199,7 +199,7 @@ class FloatingMediaWindow(QWidget):
         self.player.play()
         
     def load_settings(self):
-        self.pixel_scale = self.settings.value("pixel_scale", 3, type=int)
+        self.pixel_scale = self.settings.value("pixel_scale", 1, type=int)
         self.wandering_enabled = self.settings.value("wandering_enabled", True, type=bool)
         self.sound_enabled = self.settings.value("sound_enabled", True, type=bool)
         
