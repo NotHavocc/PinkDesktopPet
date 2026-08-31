@@ -3,7 +3,7 @@ name says it all, mew!\
 a custom-made desktop pet engine that only shows the goat PINK\
 <img src="https://cdn.discordapp.com/attachments/1515312988989689908/1542987960398385283/IMG_1507.jpg?ex=6a933b05&is=6a91e985&hm=6cfe860b50b051b7e8aee0b54084f569b4304ee556487d6953571efcafbee145&" alt="guh" style="width:30%; height:auto;">
 > [!NOTE]
-> the settings are at the right side of the taskbar, where the wifi icon is and etc. by default its hidden behind the arrow thing, click on it and youll see the icon
+> if youre using Windows: the settings are at the right side of the taskbar, where the wifi icon is and etc. by default its hidden behind the arrow thing, click on it and youll see the icon
 
 ## download
 
