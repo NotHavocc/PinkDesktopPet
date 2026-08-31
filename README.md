@@ -10,8 +10,8 @@ a custom-made desktop pet engine that only shows the goat PINK\
 > [!WARNING]  
 > windows defender may pop up and say that this is a virus, it indeed isnt, i havent hit that low yet. the code is fully open source so if youre skeptical, you can check it yourself too.
 
-[Download for Windows (.exe)](https://github.com/NotHavocc/PinkDesktopPet/releases/download/v1.0.1/PinkDesktopPet.exe)\
-[Universal Script (anyplatform) (.py)](https://github.com/NotHavocc/PinkDesktopPet/archive/refs/tags/v1.0.1.zip)\
+[Download for Windows (.exe)](https://github.com/NotHavocc/PinkDesktopPet/releases/download/v1.1.0/PinkDesktopPet.exe)\
+[Universal Script (anyplatform) (.py)](https://github.com/NotHavocc/PinkDesktopPet/archive/refs/tags/v1.1.0.zip)\
 (macOS onefile executable will release soon, there are some issues currently with PyQT on macOS)\
 \
 to use the universal script, you need python downloaded on your machine

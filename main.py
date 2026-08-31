@@ -14,7 +14,7 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
 from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QLabel, QWidget, QVBoxLayout, 
                              QSystemTrayIcon, QMenu, QDialog, QFormLayout, 
-                             QSlider, QSpinBox, QCheckBox, QPushButton, QGroupBox)
+                             QSlider, QDoubleSpinBox, QCheckBox, QPushButton, QGroupBox)
 from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings
 from PyQt6.QtGui import QMovie, QPixmap, QImageReader, QIcon, QColor
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -71,8 +71,9 @@ class FloatingMediaWindow(QWidget):
 
         self.movie = None
         self.original_size = QSize()
+        self.current_native_size = QSize()
         self.size_locked = False
-        self.pixel_scale = 1
+        self.pixel_scale = 1.0
         self.target_w = 0
         self.target_h = 0
         self.current_pixmap = None
@@ -118,10 +119,13 @@ class FloatingMediaWindow(QWidget):
         self.current_pixmap = None
 
         if file_path.lower().endswith('.gif'):
-            if not self.size_locked:
-                reader = QImageReader(file_path)
-                size = reader.size()
-                if not size.isEmpty():
+            reader = QImageReader(file_path)
+            size = reader.size()
+            
+            if not size.isEmpty():
+                self.current_native_size = size
+                
+                if not self.size_locked:
                     self.original_size = size
                     self.size_locked = True
 
@@ -129,7 +133,7 @@ class FloatingMediaWindow(QWidget):
             if not self.movie.isValid():
                 print(f"error: invalid GIF file at {file_path}")
                 return
-
+            
             self.movie.frameChanged.connect(self._update_gif_frame)
             self.movie.start()
             self._update_gif_frame()
@@ -140,8 +144,10 @@ class FloatingMediaWindow(QWidget):
                 print(f"error: invalid image file at {file_path}")
                 return
 
-            if not self.size_locked:
-                if not pixmap.size().isEmpty():
+            if not pixmap.size().isEmpty():
+                self.current_native_size = pixmap.size()
+
+                if not self.size_locked:
                     self.original_size = pixmap.size()
                     self.size_locked = True
             
@@ -154,11 +160,10 @@ class FloatingMediaWindow(QWidget):
         if not self.movie:
             return
         pixmap = self.movie.currentPixmap()
-
         scaled = pixmap.scaled(
             self.target_w, 
             self.target_h, 
-            Qt.AspectRatioMode.IgnoreAspectRatio, 
+            Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation
         )
         self.label.setPixmap(scaled)
@@ -168,17 +173,21 @@ class FloatingMediaWindow(QWidget):
             scaled = self.current_pixmap.scaled(
                 self.target_w, 
                 self.target_h, 
-                Qt.AspectRatioMode.IgnoreAspectRatio, 
+                Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.FastTransformation
             )
             self.label.setPixmap(scaled)
 
     def apply_scale(self):
-        if self.original_size.isEmpty():
+        if self.original_size.isEmpty() or self.current_native_size.isEmpty():
             return
 
-        self.target_w = max(10, self.original_size.width() * self.pixel_scale)
-        self.target_h = max(10, self.original_size.height() * self.pixel_scale)
+        fixed_height = self.original_size.height() * self.pixel_scale
+        aspect_ratio = self.current_native_size.width() / self.current_native_size.height()
+        new_width = aspect_ratio * fixed_height
+
+        self.target_w = max(10, int(round(new_width)))
+        self.target_h = max(10, int(round(fixed_height)))
 
         self.resize(self.target_w, self.target_h)
 
@@ -199,7 +208,7 @@ class FloatingMediaWindow(QWidget):
         self.player.play()
         
     def load_settings(self):
-        self.pixel_scale = self.settings.value("pixel_scale", 1, type=int)
+        self.pixel_scale = self.settings.value("pixel_scale", 1.0, type=float)
         self.wandering_enabled = self.settings.value("wandering_enabled", True, type=bool)
         self.sound_enabled = self.settings.value("sound_enabled", True, type=bool)
         
@@ -572,12 +581,11 @@ class SettingsDialog(QDialog):
         appearance_group = QGroupBox("Appearance")
         appearance_layout = QFormLayout()
         
-        self.scale_spinbox = QSpinBox()
-        self.scale_spinbox.setRange(1, 10)
-        self.scale_spinbox.setValue(3)
-        if parent:
-            self.scale_spinbox.setValue(parent.pixel_scale)
-        self.scale_spinbox.setSuffix("x")
+        self.scale_spinbox = QDoubleSpinBox()
+        self.scale_spinbox.setRange(0.1, 10.0)
+        self.scale_spinbox.setDecimals(1)
+        self.scale_spinbox.setSingleStep(0.5)
+        self.scale_spinbox.setValue(1.0) 
         
         appearance_layout.addRow("Sprite Scale:", self.scale_spinbox)
         appearance_group.setLayout(appearance_layout)
@@ -642,7 +650,7 @@ class SettingsDialog(QDialog):
 
     def on_scale_changed(self, value):
         if self.parent():
-            self.parent().pixel_scale = value
+            self.parent().pixel_scale = float(value)
             self.parent().apply_scale()
 
     def save_and_close(self):
