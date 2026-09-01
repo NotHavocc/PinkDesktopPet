@@ -1,7 +1,7 @@
 # PinkDesktopPet-XP
 name says it all, mew!\
 a custom-made desktop pet engine that only shows the goat PINK\
-<img src="https://cdn.discordapp.com/attachments/1515312988989689908/1542987960398385283/IMG_1507.jpg?ex=6a933b05&is=6a91e985&hm=6cfe860b50b051b7e8aee0b54084f569b4304ee556487d6953571efcafbee145&" alt="guh" style="width:30%; height:auto;">
+<img src=https://cdn.discordapp.com/attachments/1515312988989689908/1544411092707704953/image.png?ex=6a98686a&is=6a9716ea&hm=32de64d2aa2dbf1b0cd408e44f6a6f50f23039c92b5eec75f40efdd1daaf85c7&" alt="guh" style="width:30%; height:auto;">
 > [!NOTE]
 > this is the Windows XP compatible branch for this program, if you dont want this, please select the "main" branch, or use the other download links
 
