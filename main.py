@@ -1,25 +1,36 @@
+# WinXP port of this program, there will probably be atleast 1 person that will use this
+# so that means it works for any windows version from XP to 11
+# thanks to @carolstat8190 for giving me the idea to port this on WinXP
+
 import sys
 import random
 import os
 
 # FUCKASS macOS bug, fuck you Tim Cook
+# but havoc, isnt this the XP fork???
+# god i should just fucking kill myself
+
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     bundle_dir = sys._MEIPASS
-    
-    qt_plugins_path = os.path.join(bundle_dir, 'PyQt6', 'Qt6', 'plugins')
-    if os.path.exists(qt_plugins_path):
-        os.environ['QT_PLUGIN_PATH'] = qt_plugins_path
-        os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = os.path.join(qt_plugins_path, 'platforms')
+    for p in ['PyQt5/Qt/plugins', 'PyQt5/plugins', 'plugins']:
+        qt_plugins_path = os.path.join(bundle_dir, p)
+        if os.path.exists(qt_plugins_path):
+            os.environ['QT_PLUGIN_PATH'] = qt_plugins_path
+            os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = os.path.join(qt_plugins_path, 'platforms')
+            break
 
 from pathlib import Path
-from PyQt6.QtWidgets import (QApplication, QLabel, QWidget, QVBoxLayout, 
+from PyQt5.QtWidgets import (QApplication, QLabel, QWidget, QVBoxLayout, 
                              QSystemTrayIcon, QMenu, QDialog, QFormLayout, 
                              QSlider, QDoubleSpinBox, QCheckBox, QPushButton, QGroupBox)
-from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings
-from PyQt6.QtGui import QMovie, QPixmap, QImageReader, QIcon, QColor
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt5.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings
+from PyQt5.QtGui import QMovie, QPixmap, QImageReader, QIcon, QColor
+from PyQt5.QtMultimedia import QSoundEffect
 
-BASE_DIR = Path(__file__).parent.resolve()
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).parent.resolve()
 
 SPRITES = {
     'idle':       str(BASE_DIR / 'sprites' / 'idle.png'),
@@ -45,15 +56,11 @@ AUDIO = {
 
 TRAY_ICON_PATH = str(BASE_DIR / 'sprites' / 'icon.png') 
 
-
 class FloatingMediaWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
         self.setStyleSheet("background: transparent;")
         
@@ -78,11 +85,12 @@ class FloatingMediaWindow(QWidget):
         self.target_h = 0
         self.current_pixmap = None
         
-        self.audio_output = QAudioOutput()
-        self.audio_output.setVolume(0.5)
-        
-        self.player = QMediaPlayer()
-        self.player.setAudioOutput(self.audio_output)
+        self.sounds = {}
+        for key, path in AUDIO.items():
+            effect = QSoundEffect()
+            effect.setSource(QUrl.fromLocalFile(path))
+            effect.setVolume(0.5)
+            self.sounds[key] = effect
 
         self.settings = QSettings("Pink", "DesktopPet")
         self.wandering_enabled = True
@@ -102,6 +110,7 @@ class FloatingMediaWindow(QWidget):
 
         self.move_timer = QTimer(self)
         self.move_timer.timeout.connect(self.step_toward_target)
+        
         self.setup_system_tray()
 
         self.set_media(SPRITES['idle'])
@@ -124,14 +133,13 @@ class FloatingMediaWindow(QWidget):
             
             if not size.isEmpty():
                 self.current_native_size = size
-                
                 if not self.size_locked:
                     self.original_size = size
                     self.size_locked = True
 
             self.movie = QMovie(file_path)
             if not self.movie.isValid():
-                print(f"error: invalid GIF file at {file_path}")
+                print("error: invalid GIF file at " + file_path)
                 return
             
             self.movie.frameChanged.connect(self._update_gif_frame)
@@ -141,12 +149,11 @@ class FloatingMediaWindow(QWidget):
         else:
             pixmap = QPixmap(file_path)
             if pixmap.isNull():
-                print(f"error: invalid image file at {file_path}")
+                print("error: invalid image file at " + file_path)
                 return
 
             if not pixmap.size().isEmpty():
                 self.current_native_size = pixmap.size()
-
                 if not self.size_locked:
                     self.original_size = pixmap.size()
                     self.size_locked = True
@@ -160,22 +167,12 @@ class FloatingMediaWindow(QWidget):
         if not self.movie:
             return
         pixmap = self.movie.currentPixmap()
-        scaled = pixmap.scaled(
-            self.target_w, 
-            self.target_h, 
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation
-        )
+        scaled = pixmap.scaled(self.target_w, self.target_h, Qt.KeepAspectRatio, Qt.FastTransformation)
         self.label.setPixmap(scaled)
 
     def _apply_static_pixmap(self):
         if self.current_pixmap:
-            scaled = self.current_pixmap.scaled(
-                self.target_w, 
-                self.target_h, 
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.FastTransformation
-            )
+            scaled = self.current_pixmap.scaled(self.target_w, self.target_h, Qt.KeepAspectRatio, Qt.FastTransformation)
             self.label.setPixmap(scaled)
 
     def apply_scale(self):
@@ -197,15 +194,9 @@ class FloatingMediaWindow(QWidget):
             self._apply_static_pixmap()
     
     def play_sound(self, sound_key):
-        if sound_key not in AUDIO:
-            print(f"error: sound '{sound_key}' not found in directory")
-            return
-        
-        file_path = AUDIO[sound_key]
-        url = QUrl.fromLocalFile(file_path)
-        
-        self.player.setSource(url)
-        self.player.play()
+        if sound_key in self.sounds:
+            if not self.sounds[sound_key].isPlaying():
+                self.sounds[sound_key].play()
         
     def load_settings(self):
         self.pixel_scale = self.settings.value("pixel_scale", 1.0, type=float)
@@ -213,7 +204,10 @@ class FloatingMediaWindow(QWidget):
         self.sound_enabled = self.settings.value("sound_enabled", True, type=bool)
         
         volume = self.settings.value("volume", 50, type=int)
-        self.audio_output.setVolume(volume / 100.0 if self.sound_enabled else 0.0)
+        vol_float = (volume / 100.0) if self.sound_enabled else 0.0
+        
+        for effect in self.sounds.values():
+            effect.setVolume(vol_float)
         
         x = self.settings.value("window_x", 100, type=int)
         y = self.settings.value("window_y", 100, type=int)
@@ -224,7 +218,7 @@ class FloatingMediaWindow(QWidget):
         self.settings.setValue("wandering_enabled", self.wandering_enabled)
         self.settings.setValue("sound_enabled", self.sound_enabled)
         
-        vol = int(self.audio_output.volume() * 100)
+        vol = int(list(self.sounds.values())[0].volume() * 100)
         self.settings.setValue("volume", vol if vol > 0 else 50) 
         
         self.settings.setValue("window_x", self.pos().x())
@@ -243,10 +237,13 @@ class FloatingMediaWindow(QWidget):
             
             if sys.platform == 'darwin':
                 pixmap = icon.pixmap(32, 32)
-                mask = pixmap.createMaskFromColor(QColor(0, 0, 0), Qt.MaskMode.MaskOutColor)
+                mask = pixmap.createMaskFromColor(QColor(0, 0, 0), Qt.MaskOutColor)
                 pixmap.setMask(mask)
                 icon = QIcon(pixmap)
-                icon.setIsMask(True) 
+                try:
+                    icon.setIsMask(True) 
+                except AttributeError:
+                    pass
 
             if not icon.isNull():
                 self.tray_icon.setIcon(icon)
@@ -272,13 +269,12 @@ class FloatingMediaWindow(QWidget):
         quit_action = tray_menu.addAction("Quit")
         quit_action.triggered.connect(self.quit_app)
         
-        
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
 
     def on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+        if reason == QSystemTrayIcon.DoubleClick:
             self.toggle_visibility()
 
     def toggle_visibility(self):
@@ -302,11 +298,11 @@ class FloatingMediaWindow(QWidget):
 
     def toggle_sound(self):
         self.sound_enabled = not self.sound_enabled
-        if self.sound_enabled:
-            vol = self.settings.value("volume", 50, type=int)
-            self.audio_output.setVolume(vol / 100.0)
-        else:
-            self.audio_output.setVolume(0.0)
+        vol = self.settings.value("volume", 50, type=int)
+        vol_float = (vol / 100.0) if self.sound_enabled else 0.0
+        
+        for effect in self.sounds.values():
+            effect.setVolume(vol_float)
 
     def quit_app(self):
         self.save_settings()
@@ -314,11 +310,13 @@ class FloatingMediaWindow(QWidget):
 
     def open_settings_dialog(self):
         dialog = SettingsDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        if dialog.exec_() == QDialog.Accepted:
             self.apply_settings_from_dialog(dialog)
 
     def apply_settings_from_dialog(self, dialog):
-        self.audio_output.setVolume(dialog.volume_slider.value() / 100.0)
+        vol_float = dialog.volume_slider.value() / 100.0
+        for effect in self.sounds.values():
+            effect.setVolume(vol_float)
         
         old_scale = self.pixel_scale
         self.pixel_scale = dialog.scale_spinbox.value()
@@ -338,7 +336,8 @@ class FloatingMediaWindow(QWidget):
         
         self.sound_enabled = dialog.sound_checkbox.isChecked()
         if not self.sound_enabled:
-            self.audio_output.setVolume(0.0)
+            for effect in self.sounds.values():
+                effect.setVolume(0.0)
             
         self.save_settings()
 
@@ -372,7 +371,7 @@ class FloatingMediaWindow(QWidget):
             self.state_timer.start(random.randint(3000, 8000))
             return
         
-        special_sprite = random.randint(1,8)
+        special_sprite = random.randint(1, 8)
          
         if special_sprite in (1, 2, 3):
             self.set_media(SPRITES['idle'])
@@ -439,11 +438,11 @@ class FloatingMediaWindow(QWidget):
         self.move(step_x, step_y)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.LeftButton:
             self.is_dragging = True
             self.state_timer.stop()
             
-            grab_sound = random.randint(1,2)
+            grab_sound = random.randint(1, 2)
             if grab_sound == 1:
                 self.play_sound('gasp')
             else:
@@ -452,22 +451,21 @@ class FloatingMediaWindow(QWidget):
             self.move_timer.stop()
             self.wandering = False
             self.state = 'idle'
-            self.drag_pos = event.globalPosition().toPoint()
+            self.drag_pos = event.globalPos()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.MouseButton.LeftButton:
-            move = event.globalPosition().toPoint() - self.drag_pos
+        if event.buttons() == Qt.LeftButton:
+            move = event.globalPos() - self.drag_pos
             self.move(self.pos() + move)
-            self.drag_pos = event.globalPosition().toPoint()
+            self.drag_pos = event.globalPos()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.LeftButton:
             self.is_dragging = False      
             self.go_idle(skip_special=True)
-    
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Escape:
+        if event.key() == Qt.Key_Escape:
             self.close()
 
 class SettingsDialog(QDialog):
@@ -511,7 +509,7 @@ class SettingsDialog(QDialog):
                 margin: -4px 0;
                 border-radius: 2px;
             }
-            QSpinBox {
+            QDoubleSpinBox {
                 background-color: #ffffff;
                 color: #000000;
                 border: 1px solid #999999;
@@ -537,16 +535,16 @@ class SettingsDialog(QDialog):
         self.setFixedSize(350, 450)
         
         self.setWindowFlags(
-            Qt.WindowType.Dialog | 
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.CustomizeWindowHint |
-            Qt.WindowType.WindowTitleHint |
-            Qt.WindowType.WindowCloseButtonHint
+            Qt.Dialog | 
+            Qt.WindowStaysOnTopHint |
+            Qt.CustomizeWindowHint |
+            Qt.WindowTitleHint |
+            Qt.WindowCloseButtonHint
         )
 
         self.setAutoFillBackground(True)
         palette = self.palette()
-        palette.setColor(self.backgroundRole(), Qt.GlobalColor.white)
+        palette.setColor(self.backgroundRole(), Qt.white)
         self.setPalette(palette)
         
         layout = QVBoxLayout(self)
@@ -554,17 +552,17 @@ class SettingsDialog(QDialog):
         volume_group = QGroupBox("Audio")
         volume_layout = QFormLayout()
         
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(50)
         
-        if parent and hasattr(parent, 'audio_output'):
-            self.volume_slider.setValue(int(parent.audio_output.volume() * 100))
+        if parent and parent.sounds:
+            first_sound = list(parent.sounds.values())[0]
+            self.volume_slider.setValue(int(first_sound.volume() * 100))
         
-        self.volume_label = QLabel(f"{self.volume_slider.value()}%")
-        self.volume_slider.valueChanged.connect(
-            lambda v: self.volume_label.setText(f"{v}%")
-        )
+        self.volume_label = QLabel(str(self.volume_slider.value()) + "%")
+        self.volume_slider.valueChanged.connect(lambda v: self.volume_label.setText(str(v) + "%"))
+        self.volume_slider.valueChanged.connect(self.on_volume_changed)
         
         volume_layout.addRow("Volume:", self.volume_slider)
         volume_layout.addRow("", self.volume_label)
@@ -573,6 +571,7 @@ class SettingsDialog(QDialog):
         self.sound_checkbox.setChecked(True)
         if parent:
             self.sound_checkbox.setChecked(parent.sound_enabled)
+        self.sound_checkbox.stateChanged.connect(self.on_sound_changed)
         volume_layout.addRow("", self.sound_checkbox)
         
         volume_group.setLayout(volume_layout)
@@ -587,6 +586,10 @@ class SettingsDialog(QDialog):
         self.scale_spinbox.setSingleStep(0.5)
         self.scale_spinbox.setValue(1.0) 
         
+        if parent:
+            self.scale_spinbox.setValue(parent.pixel_scale)
+            
+        self.scale_spinbox.valueChanged.connect(self.on_scale_changed)
         appearance_layout.addRow("Sprite Scale:", self.scale_spinbox)
         appearance_group.setLayout(appearance_layout)
         layout.addWidget(appearance_group)
@@ -599,13 +602,17 @@ class SettingsDialog(QDialog):
         if parent:
             self.wander_checkbox.setChecked(parent.wandering_enabled)
         
+        self.wander_checkbox.stateChanged.connect(self.on_wander_changed)
         behavior_layout.addRow("", self.wander_checkbox)
         behavior_group.setLayout(behavior_layout)
         layout.addWidget(behavior_group)
 
-        info_label = QLabel("created by nothavoc, 2026.")
+        info_label = QLabel("created by nothavoc, 2026. v1.1.0-XP fork")
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
+        info_label2 = QLabel("idea for XP fork by @carolstat8190")
+        info_label2.setWordWrap(True)
+        layout.addWidget(info_label2)
         
         layout.addStretch()
 
@@ -637,16 +644,17 @@ class SettingsDialog(QDialog):
     def on_sound_changed(self, state):
         if self.parent():
             self.parent().sound_enabled = bool(state)
-            if not self.parent().sound_enabled:
-                self.parent().audio_output.setVolume(0.0)
-            else:
-                vol = self.parent().settings.value("volume", 50, type=int)
-                self.parent().audio_output.setVolume(vol / 100.0)
+            vol = self.parent().settings.value("volume", 50, type=int)
+            vol_float = (vol / 100.0) if self.parent().sound_enabled else 0.0
+            for effect in self.parent().sounds.values():
+                effect.setVolume(vol_float)
 
     def on_volume_changed(self, value):
-        self.volume_label.setText(f"{value}%")
+        self.volume_label.setText(str(value) + "%")
         if self.parent() and self.parent().sound_enabled:
-            self.parent().audio_output.setVolume(value / 100.0)
+            vol_float = value / 100.0
+            for effect in self.parent().sounds.values():
+                effect.setVolume(vol_float)
 
     def on_scale_changed(self, value):
         if self.parent():
@@ -662,4 +670,4 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = FloatingMediaWindow()
     window.show()
-    sys.exit(app.exec())
+    sys.exit(app.exec_())
