@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QApplication, QLabel, QWidget, QVBoxLayout,
                              QSystemTrayIcon, QMenu, QDialog, QFormLayout, 
                              QSlider, QDoubleSpinBox, QCheckBox, QPushButton, QGroupBox)
 from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings
-from PyQt6.QtGui import QMovie, QPixmap, QImageReader, QIcon, QColor
+from PyQt6.QtGui import QMovie, QPixmap, QImageReader, QIcon, QColor, QCursor
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 BASE_DIR = Path(__file__).parent.resolve()
@@ -24,6 +24,7 @@ BASE_DIR = Path(__file__).parent.resolve()
 SPRITES = {
     'idle':       str(BASE_DIR / 'sprites' / 'idle.png'),
     'concert':    str(BASE_DIR / 'sprites' / 'concert.gif'),
+    'shocked':    str(BASE_DIR / 'sprites' / 'shocked.png'),
     'laugh':      str(BASE_DIR / 'sprites' / 'laugh.gif'),
     'laugh2':     str(BASE_DIR / 'sprites' / 'laugh2.gif'),
     'crying':     str(BASE_DIR / 'sprites' / 'crying.gif'),
@@ -67,6 +68,7 @@ class FloatingMediaWindow(QWidget):
         self.label = QLabel(self)
         self.label.setStyleSheet("background: transparent;")
         self.label.setScaledContents(False)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.label)
 
         self.movie = None
@@ -96,13 +98,47 @@ class FloatingMediaWindow(QWidget):
         self.target_pos = self.pos()
         self.wandering = False
         self.is_dragging = False
-
+        
         self.state_timer = QTimer(self)
         self.state_timer.timeout.connect(self.decide_next_state)
 
         self.move_timer = QTimer(self)
         self.move_timer.timeout.connect(self.step_toward_target)
+        
+        self.setMouseTracking(True)
+        self.mouse_history = []
+        self.is_being_petted = False
+        self.petting_cooldown_active = False
+        self.base_pos = self.pos()
+        self.shake_offset = 0   
+        
+        self.petting_timeout = QTimer(self)
+        self.petting_timeout.setSingleShot(True)
+        self.petting_timeout.timeout.connect(self.end_petting)
+
+        self.hover_timer = QTimer(self)
+        self.hover_timer.timeout.connect(self.check_mouse_hover)
+        self.hover_timer.start(50) 
+
+        self.hover_timer = QTimer(self)
+        self.hover_timer.timeout.connect(self.check_mouse_hover)
+        self.hover_timer.start(50)
         self.setup_system_tray()
+        
+        particle_path = str(BASE_DIR / 'sprites' / 'heart.png')
+        if os.path.exists(particle_path):
+            self.particle_pixmap = QPixmap(particle_path).scaled(
+                18, 18, 
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.FastTransformation
+            )
+        else:
+            self.particle_pixmap = None
+
+        self.particles = []
+        self.particle_timer = QTimer(self)
+        self.particle_timer.timeout.connect(self.update_particles)
+        self.particle_timer.setInterval(50)
 
         self.set_media(SPRITES['idle'])
         self.apply_scale()
@@ -343,7 +379,7 @@ class FloatingMediaWindow(QWidget):
         self.save_settings()
 
     def decide_next_state(self):
-        if self.is_dragging:
+        if self.is_being_petted or self.is_dragging:
             self.state_timer.start(1000)
             return
 
@@ -365,6 +401,7 @@ class FloatingMediaWindow(QWidget):
         self.state = 'idle'
         self.wandering = False
         self.idle_pos = self.pos()
+        self.base_pos = self.pos()
         self.move_timer.stop()
         
         if skip_special:
@@ -437,6 +474,98 @@ class FloatingMediaWindow(QWidget):
         step_x = current.x() + int(speed * dx / dist)
         step_y = current.y() + int(speed * dy / dist)
         self.move(step_x, step_y)
+        
+    def spawn_particle(self):
+        if not self.particle_pixmap:
+            return
+            
+        label = QLabel(self)
+        label.setPixmap(self.particle_pixmap)
+        label.setStyleSheet("background: transparent;")
+        
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        start_x = (self.width() // 2) + random.randint(-20, 20)
+        start_y = (self.height() // 4) + random.randint(-10, 10)
+        
+        label.move(start_x, start_y)
+        label.show()
+        
+        self.particles.append({
+            'widget': label,
+            'x': float(start_x),
+            'y': float(start_y),
+            'dx': random.uniform(-1.5, 1.5),
+            'dy': random.uniform(-5.5, -2.5), 
+            'life': 1.0, 
+            'decay': random.uniform(0.03, 0.06)
+        })
+
+    def update_particles(self):
+        if self.is_being_petted and random.random() < 0.5:
+            self.spawn_particle()
+
+        dead_particles = []
+        for p in self.particles:
+            p['x'] += p['dx']
+            p['y'] += p['dy']
+            p['life'] -= p['decay']
+            
+            if p['life'] <= 0:
+                dead_particles.append(p)
+            else:
+                p['widget'].move(int(p['x']), int(p['y']))
+
+        for p in dead_particles:
+            p['widget'].deleteLater()
+            self.particles.remove(p)
+        
+    def check_mouse_hover(self):
+        if self.is_dragging:
+            return 
+        if self.state == 'walking':
+            return
+        if self.petting_cooldown_active:
+            return
+        global_pos = QCursor.pos()
+        
+        if self.geometry().contains(global_pos):
+            local_y = global_pos.y() - self.pos().y()
+            local_x = global_pos.x() - self.pos().x()
+
+            if local_y < self.height() * 0.25:
+                self.mouse_history.append(local_x)
+
+                if len(self.mouse_history) >= 2:
+                    dx = local_x - self.mouse_history[-2]
+                    self.shake_offset += int(dx * 0.15) 
+                    self.shake_offset = max(-5, min(5, self.shake_offset)) 
+                    self.move(self.base_pos.x() + self.shake_offset, self.base_pos.y())
+
+                if len(self.mouse_history) > 40:
+                    self.mouse_history.pop(0)
+
+                total_movement = 0
+                for i in range(1, len(self.mouse_history)):
+                    total_movement += abs(self.mouse_history[i] - self.mouse_history[i-1])
+
+                if total_movement > 120:
+                    self.trigger_petting()
+                    self.mouse_history.clear()
+            else:
+                if self.shake_offset != 0:
+                    self.shake_offset = int(self.shake_offset * 0.5) 
+                    if abs(self.shake_offset) < 1:
+                        self.shake_offset = 0
+                    self.move(self.base_pos.x() + self.shake_offset, self.base_pos.y())
+                self.mouse_history.clear()
+        else:
+            if self.shake_offset != 0:
+                self.shake_offset = int(self.shake_offset * 0.5)
+                if abs(self.shake_offset) < 1:
+                    self.shake_offset = 0
+                self.move(self.base_pos.x() + self.shake_offset, self.base_pos.y())
+            self.mouse_history.clear()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -462,10 +591,39 @@ class FloatingMediaWindow(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.is_dragging = False      
+            self.is_dragging = False
+            self.base_pos = self.pos()
             self.go_idle(skip_special=True)
     
+    def trigger_petting(self):
+        if not self.is_being_petted:
+            self.is_being_petted = True
+            
+            self.set_media(SPRITES['shocked'])
+            self.play_sound('gasp')
+            
+            if self.particle_pixmap:
+                self.particle_timer.start()
+        
+        self.petting_timeout.start(2000)
 
+    def end_petting(self):
+        self.is_being_petted = False
+        self.petting_cooldown_active = True
+        
+        self.particle_timer.stop()
+        for p in self.particles:
+            p['widget'].deleteLater()
+        self.particles.clear()
+        
+        self.base_pos = self.pos()
+        self.go_idle(skip_special=True)
+        
+        QTimer.singleShot(4000, self.end_cooldown)
+
+    def end_cooldown(self):
+        self.petting_cooldown_active = False
+    
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
