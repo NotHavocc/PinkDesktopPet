@@ -37,6 +37,8 @@ SPRITES = {
     'up':         str(BASE_DIR / 'sprites' / 'walkup.gif'),
     'down':       str(BASE_DIR / 'sprites' / 'walkdown.gif'),
     'explosion':  str(BASE_DIR / 'sprites' / 'explosion.gif'),
+    'spin':       str(BASE_DIR / 'sprites' / 'spin.gif'),
+    'dance':       str(BASE_DIR / 'sprites' / 'dance.gif'),
 }
 
 AUDIO = {
@@ -47,6 +49,21 @@ AUDIO = {
     'sad':        str(BASE_DIR / 'audio' / 'sad.wav'),
     'trip':       str(BASE_DIR / 'audio' / 'trip.wav'),
 }
+
+# new random special sprite method
+# modders (if there are any), please keep the sum of the chances to 100%
+IDLE_BEHAVIORS = [
+    #(sprite,        audio,    chance)
+    ("idle",         None,       40),   
+    ("concert",      None,       10),
+    ("laugh",        "laugh",    10),
+    ("laugh2",       "laugh2",   10),
+    ("crying",       "sad",      10),
+    ("overjoyed",    None,        5),
+    ("sitting",      None,        5),
+    ("spin",         None,        5),
+    ("dance",        None,        5),
+]
 
 TRAY_ICON_PATH = str(BASE_DIR / 'sprites' / 'icon.png') 
 
@@ -430,6 +447,8 @@ class FloatingMediaWindow(QWidget):
             self.go_idle()
 
     def go_idle(self, skip_special=False):
+        # changed all of the if,elif toby fox undertale code ahh crap to a percentage system,
+        # following PDPEngine philosophy o algo
         self.state = 'idle'
         self.wandering = False
         self.idle_pos = self.pos()
@@ -441,28 +460,17 @@ class FloatingMediaWindow(QWidget):
             self.state_timer.start(random.randint(3000, 8000))
             return
         
-        special_sprite = random.randint(1,9)
-         
-        if special_sprite in (1, 2, 3):
-            self.set_media(SPRITES['idle'])
-        elif special_sprite == 4:
-            self.set_media(SPRITES['concert'])
-        elif special_sprite == 5:
-            self.set_media(SPRITES['laugh'])
-            self.play_sound('laugh')
-        elif special_sprite == 6:
-            self.set_media(SPRITES['laugh2'])
-            self.play_sound('laugh2')
-        elif special_sprite == 7:
-            self.set_media(SPRITES['crying'])
-            self.play_sound('sad')
-        elif special_sprite == 8:
-            self.set_media(SPRITES['overjoyed'])
-        elif special_sprite == 9:
-            self.set_media(SPRITES['sitting'])
+        weights = [behavior[2] for behavior in IDLE_BEHAVIORS]
+        sprite_key, sound_key, _percent = random.choices(IDLE_BEHAVIORS, weights=weights, k=1)[0]
+        
+        if sprite_key in SPRITES:
+            self.set_media(SPRITES[sprite_key])
         else:
-            print("God is dead. God remains dead. And we have killed him. How shall we comfort ourselves, the murderers of all murderers?")
-
+            self.set_media(SPRITES['idle'])
+        
+        if sound_key:
+            self.play_sound(sound_key)
+        
         self.state_timer.start(random.randint(3000, 8000))
 
     def start_wander(self):
