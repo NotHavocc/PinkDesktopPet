@@ -907,7 +907,7 @@ class SettingsDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
-        version = QLabel("Version 2.0.0")
+        version = QLabel("Version 2.1.0")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version.setStyleSheet("color: #aaaaaa;")
         layout.addWidget(version)
