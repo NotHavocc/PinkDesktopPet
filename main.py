@@ -15,7 +15,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QLabel, QWidget, QVBoxLayout, 
                              QSystemTrayIcon, QMenu, QDialog, QFormLayout, 
                              QSlider, QDoubleSpinBox, QCheckBox, QPushButton, QGroupBox, QListWidget, QStackedWidget, QHBoxLayout)
-from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings
+from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings, QObject, pyqtSignal
 from PyQt6.QtGui import QMovie, QPixmap, QImageReader, QIcon, QColor, QCursor, QDesktopServices
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
@@ -38,7 +38,7 @@ SPRITES = {
     'down':       str(BASE_DIR / 'sprites' / 'walkdown.gif'),
     'explosion':  str(BASE_DIR / 'sprites' / 'explosion.gif'),
     'spin':       str(BASE_DIR / 'sprites' / 'spin.gif'),
-    'dance':       str(BASE_DIR / 'sprites' / 'dance.gif'),
+    'dance':      str(BASE_DIR / 'sprites' / 'dance.gif'),
 }
 
 AUDIO = {
@@ -50,27 +50,30 @@ AUDIO = {
     'trip':       str(BASE_DIR / 'audio' / 'trip.wav'),
 }
 
-# new random special sprite method
-# modders (if there are any), please keep the sum of the chances to 100%
+# for modders (if there are any), make sure that the sum of the numbers in the 3rd
+# row are 100. those are the percentages of the specific animations appearing
 IDLE_BEHAVIORS = [
-    #(sprite,        audio,    chance)
-    ("idle",         None,       40),   
-    ("concert",      None,       10),
-    ("laugh",        "laugh",    10),
-    ("laugh2",       "laugh2",   10),
-    ("crying",       "sad",      10),
-    ("overjoyed",    None,        5),
-    ("sitting",      None,        5),
-    ("spin",         None,        5),
-    ("dance",        None,        5),
+    ("idle",      None,     40),   
+    ("concert",   None,     10),
+    ("laugh",     "laugh",  10),
+    ("laugh2",    "laugh2", 10),
+    ("crying",    "sad",    10),
+    ("overjoyed", None,      5),
+    ("sitting",   None,      5),
+    ("spin",      None,      5),
+    ("dance",     None,      5),
 ]
 
 TRAY_ICON_PATH = str(BASE_DIR / 'sprites' / 'icon.png') 
 
 
 class FloatingMediaWindow(QWidget):
-    def __init__(self):
+    closed = pyqtSignal(object)
+    
+    def __init__(self, manager):
         super().__init__()
+        self.manager = manager
+        self.manager.settings_changed.connect(self.reload_settings)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint
@@ -113,14 +116,13 @@ class FloatingMediaWindow(QWidget):
         self.wandering_enabled = True
         self.sound_enabled = True
 
-        self.load_settings()
-
         self.state = 'idle'      
         self.idle_pos = self.pos() 
         self.direction = 'down'
         self.target_pos = self.pos()
         self.wandering = False
         self.is_dragging = False
+        self.is_despawning = False
         
         self.state_timer = QTimer(self)
         self.state_timer.timeout.connect(self.decide_next_state)
@@ -146,13 +148,12 @@ class FloatingMediaWindow(QWidget):
         self.hover_timer = QTimer(self)
         self.hover_timer.timeout.connect(self.check_mouse_hover)
         self.hover_timer.start(50) 
-
-        self.hover_timer = QTimer(self)
-        self.hover_timer.timeout.connect(self.check_mouse_hover)
-        self.hover_timer.start(50)
-        self.setup_system_tray()
         
         particle_path = str(BASE_DIR / 'sprites' / 'heart.png')
+        # will i ever find true love? i dont look allat good,
+        # and my personality isnt the best either. i just
+        # hope that the things im currently doing help
+        # people in atleast some way. i love you all <3
         if os.path.exists(particle_path):
             self.particle_pixmap = QPixmap(particle_path).scaled(
                 18, 18, 
@@ -174,6 +175,7 @@ class FloatingMediaWindow(QWidget):
         self.last_overlay_frame = -1
         self.overlay_label.hide()
 
+        self.load_settings()
         self.set_media(SPRITES['idle'])
         self.apply_scale()
         self.state_timer.start(random.randint(3000, 8000))
@@ -277,7 +279,7 @@ class FloatingMediaWindow(QWidget):
         self.player.setSource(url)
         self.player.play()
         
-    def load_settings(self):
+    def load_settings(self, apply_position=True):
         self.pixel_scale = self.settings.value("pixel_scale", 1.0, type=float)
         self.walk_speed = self.settings.value("walk_speed", 2, type=int)
         self.drag_enabled = self.settings.value("drag_enabled", True, type=bool)
@@ -287,9 +289,16 @@ class FloatingMediaWindow(QWidget):
         volume = self.settings.value("volume", 50, type=int)
         self.audio_output.setVolume(volume / 100.0 if self.sound_enabled else 0.0)
         
-        x = self.settings.value("window_x", 100, type=int)
-        y = self.settings.value("window_y", 100, type=int)
-        self.move(x, y)
+        if apply_position:
+            base_x = self.settings.value("window_x", 100, type=int)
+            base_y = self.settings.value("window_y", 100, type=int)
+            self.move(base_x + random.randint(-100, 100), base_y + random.randint(-100, 100))
+            
+    def reload_settings(self):
+        old_scale = self.pixel_scale
+        self.load_settings(apply_position=False)
+        if self.pixel_scale != old_scale:
+            self.apply_scale()
 
     def save_settings(self):
         self.settings.setValue("pixel_scale", self.pixel_scale)
@@ -299,135 +308,37 @@ class FloatingMediaWindow(QWidget):
         
         vol = int(self.audio_output.volume() * 100)
         self.settings.setValue("volume", vol if vol > 0 else 50) 
-        
+                
         self.settings.setValue("window_x", self.pos().x())
         self.settings.setValue("window_y", self.pos().y())
+        self.manager.notify_settings_changed()
         self.settings.sync()
 
     def closeEvent(self, event):
         self.save_settings()
+        self.closed.emit(self)
         event.accept()
-
-    def setup_system_tray(self):
-        self.tray_icon = QSystemTrayIcon(self)
         
-        if os.path.exists(TRAY_ICON_PATH):
-            icon = QIcon(TRAY_ICON_PATH)
-            
-            if sys.platform == 'darwin':
-                pixmap = icon.pixmap(32, 32)
-                mask = pixmap.createMaskFromColor(QColor(0, 0, 0), Qt.MaskMode.MaskOutColor)
-                pixmap.setMask(mask)
-                icon = QIcon(pixmap)
-                icon.setIsMask(True) 
+    def despawn(self):
+        if self.is_despawning:
+            return
+        self.is_despawning = True
 
-            if not icon.isNull():
-                self.tray_icon.setIcon(icon)
-        else:
-            pixmap = QPixmap(32, 32)
-            pixmap.fill(QColor(100, 149, 237))
-            self.tray_icon.setIcon(QIcon(pixmap))
+        self.state_timer.stop()
+        self.move_timer.stop()
+        self.hover_timer.stop()
+        self.petting_timeout.stop()
+        self.explode_timer.stop()
+        self.wandering = False
+        self.is_dragging = False
 
-        tray_menu = QMenu()
-        
-        settings_action = tray_menu.addAction("Settings")
-        settings_action.triggered.connect(self.open_settings_dialog)
-        tray_menu.addSeparator()
-        
-        self.wander_action = tray_menu.addAction("Toggle Wandering")
-        self.wander_action.triggered.connect(self.toggle_wandering)
-        self.sound_action = tray_menu.addAction("Toggle Sound")
-        self.sound_action.triggered.connect(self.toggle_sound)
-        self.drag_action = tray_menu.addAction("Disable Dragging" if self.drag_enabled else "Enable Dragging")
-        self.drag_action.triggered.connect(self.toggle_dragging)
-        tray_menu.addSeparator()
-        
-        hide_action = tray_menu.addAction("Hide/Show")
-        hide_action.triggered.connect(self.toggle_visibility)
-        quit_action = tray_menu.addAction("Quit")
-        quit_action.triggered.connect(self.quit_app)
-        
-        
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self.on_tray_activated)
-        self.tray_icon.show()
-
-    def on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.toggle_visibility()
-
-    def toggle_visibility(self):
-        if self.isVisible():
-            self.hide()
-        else:
-            self.show()
-            self.raise_()
-            self.activateWindow()
-    
-    def toggle_dragging(self):
-        self.drag_enabled = not self.drag_enabled
-        if self.drag_enabled:
-            self.drag_action.setText("Disable Dragging")
-        else:
-            self.drag_action.setText("Enable Dragging")
-
-        self.save_settings()
-
-    def toggle_wandering(self):
-        self.wandering_enabled = not self.wandering_enabled
-        if not self.wandering_enabled:
-            self.move_timer.stop()
-            self.state_timer.stop()
-            self.state = 'idle'        
-            self.wandering = False   
-            self.go_idle(skip_special=True)
-        else:
-            self.state_timer.start(random.randint(3000, 8000))
-
-    def toggle_sound(self):
-        self.sound_enabled = not self.sound_enabled
-        if self.sound_enabled:
-            vol = self.settings.value("volume", 50, type=int)
-            self.audio_output.setVolume(vol / 100.0)
-        else:
-            self.audio_output.setVolume(0.0)
-
-    def quit_app(self):
-        self.save_settings()
-        QApplication.quit()
-
-    def open_settings_dialog(self):
-        dialog = SettingsDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.apply_settings_from_dialog(dialog)
-
-    def apply_settings_from_dialog(self, dialog):
-        self.audio_output.setVolume(dialog.volume_slider.value() / 100.0)
-        
-        old_scale = self.pixel_scale
-        self.pixel_scale = dialog.scale_spinbox.value()
-        if self.pixel_scale != old_scale:
-            self.apply_scale()
-
-        self.walk_speed = dialog.speed_slider.value()
-        self.wandering_enabled = dialog.wander_checkbox.isChecked()
-        if not self.wandering_enabled:
-            self.move_timer.stop()
-            self.state_timer.stop()
-            self.state = 'idle'
-            self.wandering = False
-            self.go_idle(skip_special=True)
-        else:
-            if not self.state_timer.isActive():
-                self.state_timer.start(random.randint(3000, 8000))
-        
-        self.sound_enabled = dialog.sound_checkbox.isChecked()
-        if not self.sound_enabled:
-            self.audio_output.setVolume(0.0)
-            
-        self.save_settings()
+        self.kaboom()
+        QTimer.singleShot(2000, self.close)
 
     def decide_next_state(self):
+        if self.is_despawning:
+            return
+        
         if self.is_being_petted or self.is_dragging:
             self.state_timer.start(1000)
             return
@@ -447,8 +358,6 @@ class FloatingMediaWindow(QWidget):
             self.go_idle()
 
     def go_idle(self, skip_special=False):
-        # changed all of the if,elif toby fox undertale code ahh crap to a percentage system,
-        # following PDPEngine philosophy o algo
         self.state = 'idle'
         self.wandering = False
         self.idle_pos = self.pos()
@@ -506,7 +415,7 @@ class FloatingMediaWindow(QWidget):
         dy = self.target_pos.y() - current.y()
         dist = (dx ** 2 + dy ** 2) ** 0.5
 
-        if dist < 4:
+        if dist < 4 or dist <= self.walk_speed:
             self.move(self.target_pos)
             self.move_timer.stop()
             self.go_idle()
@@ -524,7 +433,6 @@ class FloatingMediaWindow(QWidget):
         label = QLabel(self)
         label.setPixmap(self.particle_pixmap)
         label.setStyleSheet("background: transparent;")
-        
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         start_x = (self.width() // 2) + random.randint(-20, 20)
@@ -563,12 +471,9 @@ class FloatingMediaWindow(QWidget):
             self.particles.remove(p)
         
     def check_mouse_hover(self):
-        if self.is_dragging:
-            return 
-        if self.state == 'walking':
+        if self.is_despawning or self.is_dragging or self.state == 'walking' or self.petting_cooldown_active:
             return
-        if self.petting_cooldown_active:
-            return
+        
         global_pos = QCursor.pos()
         
         if self.geometry().contains(global_pos):
@@ -587,9 +492,7 @@ class FloatingMediaWindow(QWidget):
                 if len(self.mouse_history) > 40:
                     self.mouse_history.pop(0)
 
-                total_movement = 0
-                for i in range(1, len(self.mouse_history)):
-                    total_movement += abs(self.mouse_history[i] - self.mouse_history[i-1])
+                total_movement = sum(abs(self.mouse_history[i] - self.mouse_history[i-1]) for i in range(1, len(self.mouse_history)))
 
                 if total_movement > 120:
                     self.trigger_petting()
@@ -610,7 +513,7 @@ class FloatingMediaWindow(QWidget):
             self.mouse_history.clear()
 
     def mousePressEvent(self, event):
-        if not self.drag_enabled:
+        if self.is_despawning or not self.drag_enabled:
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
@@ -700,6 +603,8 @@ class FloatingMediaWindow(QWidget):
         if current_frame < self.last_overlay_frame:
             self.overlay_movie.stop()
             self.hide_overlay()
+            if self.is_despawning:
+                self.close()
             return
             
         self.last_overlay_frame = current_frame
@@ -738,8 +643,6 @@ class FloatingMediaWindow(QWidget):
         self.overlay_label.clear()
         
     def kaboom(self):
-        # nietzsche spoke of this.
-        # no he didnt
         self.particle_timer.stop()
         for p in self.particles:
             p['widget'].deleteLater()
@@ -755,6 +658,7 @@ class FloatingMediaWindow(QWidget):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
+
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -915,7 +819,7 @@ class SettingsDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
-        version = QLabel("Version 2.1.0")
+        version = QLabel("Version 2.2.0")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version.setStyleSheet("color: #aaaaaa;")
         layout.addWidget(version)
@@ -926,7 +830,7 @@ class SettingsDialog(QDialog):
         desc.setStyleSheet("color: #cccccc; margin-top: 20px; font-size: 14px;")
         layout.addWidget(desc)
         
-        github_url = "https://github.com/NotHavocc/PinkDesktopPet/releases/latest"
+        github_url = "https://github.com/NotHavocc/PinkDesktoppet/releases/latest"
         
         link_label = QLabel(f'<a href="{github_url}" style="color: #ff8a90; text-decoration: none;">Check for Updates on GitHub</a>')
         link_label.setTextFormat(Qt.TextFormat.RichText)
@@ -987,6 +891,7 @@ class SettingsDialog(QDialog):
         wander_group.setLayout(wander_layout)
         layout.addWidget(wander_group)
         
+        # she has so much aura when speed is at 10 trust frfr
         speed_group = QGroupBox("Movement Speed")
         speed_layout = QFormLayout()
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
@@ -1087,9 +992,88 @@ class SettingsDialog(QDialog):
             self.parent().walk_speed = self.speed_slider.value()
             self.parent().save_settings()
         self.accept()
+        
+
+class AppManager(QObject):
+    settings_changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.pets = []
+        self.setup_tray()
+
+    def setup_tray(self):
+        self.tray_icon = QSystemTrayIcon()
+        if os.path.exists(TRAY_ICON_PATH):
+            icon = QIcon(TRAY_ICON_PATH)
+            if sys.platform == 'darwin':
+                pixmap = icon.pixmap(32, 32)
+                mask = pixmap.createMaskFromColor(QColor(0, 0, 0), Qt.MaskMode.MaskOutColor)
+                pixmap.setMask(mask)
+                icon = QIcon(pixmap)
+                icon.setIsMask(True)
+            if not icon.isNull():
+                self.tray_icon.setIcon(icon)
+        else:
+            pixmap = QPixmap(32, 32)
+            pixmap.fill(QColor(100, 149, 237))
+            self.tray_icon.setIcon(QIcon(pixmap))
+
+        tray_menu = QMenu()
+        tray_menu.addAction("Spawn Pet").triggered.connect(self.spawn_pet)
+        tray_menu.addAction("Settings").triggered.connect(self.open_settings)
+        tray_menu.addSeparator()
+        
+        self.pets_menu = tray_menu.addMenu("Active Pets")
+        self.pets_menu.aboutToShow.connect(self.update_pets_menu)
+        
+        tray_menu.addSeparator()
+        tray_menu.addAction("Close All Pets").triggered.connect(self.close_all_pets)
+        tray_menu.addAction("Quit").triggered.connect(self.quit_app)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.show()
+
+    def spawn_pet(self):
+        pet = FloatingMediaWindow(self)
+        self.pets.append(pet)
+        pet.closed.connect(lambda p=pet: self.remove_pet(p))
+        pet.show()
+
+    def remove_pet(self, pet):
+        if pet in self.pets:
+            self.pets.remove(pet)
+        if not self.pets:
+            QApplication.quit()
+
+    def open_settings(self):
+        if self.pets:
+            SettingsDialog(self.pets[0]).exec()
+
+    def update_pets_menu(self):
+        self.pets_menu.clear()
+        if not self.pets:
+            self.pets_menu.addAction("No pets").setEnabled(False)
+            return
+        for i, pet in enumerate(self.pets):
+            action = self.pets_menu.addAction(f"Remove Pink #{i+1}")
+            action.triggered.connect(lambda checked, p=pet: p.despawn())
+
+    def close_all_pets(self):
+        for pet in self.pets[:]:
+            pet.despawn()
+
+    def quit_app(self):
+        for pet in self.pets[:]:
+            pet.save_settings()
+        QApplication.quit()
+
+    def notify_settings_changed(self):
+        self.settings_changed.emit()
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window = FloatingMediaWindow()
-    window.show()
+    manager = AppManager()
+    manager.spawn_pet()
     sys.exit(app.exec())
