@@ -4,11 +4,8 @@
 ![Static Badge](https://img.shields.io/badge/open_source-with_%3C3-blue)\
 name says it all, mew!\
 a custom-made desktop pet engine that only shows the goat PINK
-
-## **Liked PinkDesktopPet, and wanted to put in your own characters?**
-## Then check out my latest project: [PDPEngine](https://github.com/NotHavocc/PDPEngine)!
-
 \
+<img src="https://cdn.discordapp.com/attachments/1515312988989689908/1554953621085491291/image.png?backend=b2&ex=6ac20ea8&is=6ac0bd28&hm=ad03d5d3c8d4bc29b3121fda7fc588e07e91b1dca1b02ff0b4218495dc95c720&" alt="screenshot" style="width:40%; height:auto;">
 <img src="https://cdn.discordapp.com/attachments/1515312988989689908/1542987960398385283/IMG_1507.jpg?ex=6a933b05&is=6a91e985&hm=6cfe860b50b051b7e8aee0b54084f569b4304ee556487d6953571efcafbee145&" alt="guh" style="width:30%; height:auto;">
 > [!NOTE]
 > if youre using Windows: the settings are at the right side of the taskbar, where the wifi icon is and etc. by default its hidden behind the arrow thing, click on it and youll see the icon
@@ -38,6 +35,20 @@ sudo apt install python3-pip gstreamer1.0-plugins-good gstreamer1.0-plugins-bad 
 pip3 install PyQt6
 ```
 (same would go for other distros, just use your respective package manager)
+
+## for developers
+
+these are the commands that were used for compiling the .py project into .exe (or the respective platform's executable)\
+\
+**windows**
+```
+pyinstaller --noconfirm --onefile --windowed --name "PinkDesktopPet" --add-data "audio;audio" --add-data "sprites;sprites" --icon icon.ico --hidden-import PyQt6.QtMultimedia main.py
+```
+\
+**macOS/linux**
+```
+pyinstaller --noconfirm --onefile --windowed --name "PinkDesktopPet" --add-data "audio:audio" --add-data "sprites:sprites" --icon icon.ico --hidden-import PyQt6.QtMultimedia main.py
+```
 
 
 
