@@ -15,12 +15,18 @@ from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QLabel, QWidget, QVBoxLayout, 
                              QSystemTrayIcon, QMenu, QDialog, QFormLayout, 
                              QSlider, QDoubleSpinBox, QCheckBox, QPushButton, QGroupBox, QListWidget, QStackedWidget, QHBoxLayout)
-from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QTimer, QPoint, QUrl, QSettings, QObject, pyqtSignal, QThread
 from PyQt6.QtGui import QMovie, QPixmap, QImageReader, QIcon, QColor, QCursor, QDesktopServices
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+import platform
+import ctypes
+import ctypes.util
+import subprocess
 
 BASE_DIR = Path(__file__).parent.resolve()
 
+# full list of sprites, append if you put your own additional ones
+# do NOT remove idle, run, left, right, up, down. as theyre essenital to the core movement functions
 SPRITES = {
     'idle':       str(BASE_DIR / 'sprites' / 'idle.png'),
     'burnt':      str(BASE_DIR / 'sprites' / 'burnt.png'),
@@ -39,8 +45,10 @@ SPRITES = {
     'explosion':  str(BASE_DIR / 'sprites' / 'explosion.gif'),
     'spin':       str(BASE_DIR / 'sprites' / 'spin.gif'),
     'dance':      str(BASE_DIR / 'sprites' / 'dance.gif'),
+    'kazotsky':   str(BASE_DIR / 'sprites' / 'kazotsky.gif'),
 }
 
+#full list of audio
 AUDIO = {
     'laugh':      str(BASE_DIR / 'audio' / 'laugh.wav'),
     'laugh2':     str(BASE_DIR / 'audio' / 'laugh2.wav'),
@@ -53,19 +61,26 @@ AUDIO = {
 # for modders (if there are any), make sure that the sum of the numbers in the 3rd
 # row are 100. those are the percentages of the specific animations appearing
 IDLE_BEHAVIORS = [
+    # (sprite, audio, chance)
     ("idle",      None,     40),   
-    ("concert",   None,     10),
-    ("laugh",     "laugh",  10),
+    ("laugh",     "laugh",  15),
     ("laugh2",    "laugh2", 10),
     ("crying",    "sad",    10),
+    ("kazotsky",  None,      5),
     ("overjoyed", None,      5),
     ("sitting",   None,      5),
     ("spin",      None,      5),
     ("dance",     None,      5),
 ]
 
-TRAY_ICON_PATH = str(BASE_DIR / 'sprites' / 'icon.png') 
+# sum of chance should also be 100
+MUSIC_BEHAVIORS = [
+    # (sprite, audio, chance)
+    ("kazotsky",None, 25),
+    ("concert", None, 75),
+]
 
+TRAY_ICON_PATH = str(BASE_DIR / 'sprites' / 'icon.png') 
 
 class FloatingMediaWindow(QWidget):
     closed = pyqtSignal(object)
@@ -147,12 +162,10 @@ class FloatingMediaWindow(QWidget):
 
         self.hover_timer = QTimer(self)
         self.hover_timer.timeout.connect(self.check_mouse_hover)
-        self.hover_timer.start(50) 
+        self.hover_timer.start(50)
         
         particle_path = str(BASE_DIR / 'sprites' / 'heart.png')
-        # will i ever find true love? i dont look allat good,
-        # and my personality isnt the best either. i just
-        # hope that the things im currently doing help
+        # i hope that the things im currently doing help
         # people in atleast some way. i love you all <3
         if os.path.exists(particle_path):
             self.particle_pixmap = QPixmap(particle_path).scaled(
@@ -174,6 +187,16 @@ class FloatingMediaWindow(QWidget):
         self.overlay_movie = None
         self.last_overlay_frame = -1
         self.overlay_label.hide()
+        
+        self.is_music_playing = False
+        self.music_timer = QTimer(self)
+        self.music_timer.timeout.connect(self.do_music_behavior)
+        
+        self.music_detection_enabled = self.settings.value("music_detection_enabled", True, type=bool)
+        self.music_detector = MusicDetectorThread()
+        self.music_detector.music_changed.connect(self.on_music_state_changed)
+        if self.music_detection_enabled:
+            self.music_detector.start()
 
         self.load_settings()
         self.set_media(SPRITES['idle'])
@@ -285,6 +308,7 @@ class FloatingMediaWindow(QWidget):
         self.drag_enabled = self.settings.value("drag_enabled", True, type=bool)
         self.wandering_enabled = self.settings.value("wandering_enabled", True, type=bool)
         self.sound_enabled = self.settings.value("sound_enabled", True, type=bool)
+        self.music_detection_enabled = self.settings.value("music_detection_enabled", True, type=bool)
         
         volume = self.settings.value("volume", 50, type=int)
         self.audio_output.setVolume(volume / 100.0 if self.sound_enabled else 0.0)
@@ -296,15 +320,19 @@ class FloatingMediaWindow(QWidget):
             
     def reload_settings(self):
         old_scale = self.pixel_scale
+        old_music = self.music_detection_enabled
         self.load_settings(apply_position=False)
         if self.pixel_scale != old_scale:
             self.apply_scale()
+        if self.music_detection_enabled != old_music:
+            self.set_music_detection(self.music_detection_enabled)
 
     def save_settings(self):
         self.settings.setValue("pixel_scale", self.pixel_scale)
         self.settings.setValue("drag_enabled", self.drag_enabled)
         self.settings.setValue("wandering_enabled", self.wandering_enabled)
         self.settings.setValue("sound_enabled", self.sound_enabled)
+        self.settings.setValue("music_detection_enabled", self.music_detection_enabled)
         
         vol = int(self.audio_output.volume() * 100)
         self.settings.setValue("volume", vol if vol > 0 else 50) 
@@ -315,6 +343,8 @@ class FloatingMediaWindow(QWidget):
         self.settings.sync()
 
     def closeEvent(self, event):
+        self.music_detector.running = False
+        self.music_detector.wait()
         self.save_settings()
         self.closed.emit(self)
         event.accept()
@@ -338,7 +368,9 @@ class FloatingMediaWindow(QWidget):
     def decide_next_state(self):
         if self.is_despawning:
             return
-        
+        if self.is_music_playing:
+            self.set_media(SPRITES['concert'])
+            return   
         if self.is_being_petted or self.is_dragging:
             self.state_timer.start(1000)
             return
@@ -363,26 +395,30 @@ class FloatingMediaWindow(QWidget):
         self.idle_pos = self.pos()
         self.base_pos = self.pos()
         self.move_timer.stop()
-        
-        if skip_special:
+
+        if self.is_music_playing:
+            flip_the_coin = random.randint(1,4)
+            if flip_the_coin == 1 or flip_the_coin == 2:
+                self.set_media(SPRITES['concert'])
+            elif flip_the_coin == 3 or flip_the_coin == 4:
+                self.set_media(SPRITES['kazotsky'])
+            else:
+                print("how did you fail to flip a coin??? idiot idiot IDIOT!!!!!!")
+        elif skip_special:
             self.set_media(SPRITES['idle'])
-            self.state_timer.start(random.randint(3000, 8000))
-            return
-        
-        weights = [behavior[2] for behavior in IDLE_BEHAVIORS]
-        sprite_key, sound_key, _percent = random.choices(IDLE_BEHAVIORS, weights=weights, k=1)[0]
-        
-        if sprite_key in SPRITES:
-            self.set_media(SPRITES[sprite_key])
         else:
-            self.set_media(SPRITES['idle'])
-        
-        if sound_key:
-            self.play_sound(sound_key)
-        
+            weights = [b[2] for b in IDLE_BEHAVIORS]
+            sprite_key, sound_key, _ = random.choices(IDLE_BEHAVIORS, weights=weights, k=1)[0]
+            self.set_media(SPRITES.get(sprite_key, SPRITES['idle']))
+            if sound_key:
+                self.play_sound(sound_key)
+
         self.state_timer.start(random.randint(3000, 8000))
 
     def start_wander(self):
+        if self.is_music_playing:
+            return
+        
         screen = QApplication.primaryScreen().geometry()
         max_x = screen.width() - self.width()
         max_y = screen.height() - self.height()
@@ -515,6 +551,7 @@ class FloatingMediaWindow(QWidget):
     def mousePressEvent(self, event):
         if self.is_despawning or not self.drag_enabled:
             return
+        self.music_timer.stop() 
 
         if event.button() == Qt.MouseButton.LeftButton:
             self.is_dragging = True
@@ -547,6 +584,16 @@ class FloatingMediaWindow(QWidget):
             self.is_dragging = False      
             self.base_pos = self.pos()
             self.go_idle(skip_special=True)
+        
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.is_dragging = False      
+            self.base_pos = self.pos()
+
+            if self.is_music_playing:
+                self.music_timer.start(random.randint(8000, 15000))
+                self.do_music_behavior()
+            else:
+                self.go_idle(skip_special=True)
     
     def trigger_petting(self):
         if not self.is_being_petted:
@@ -658,6 +705,44 @@ class FloatingMediaWindow(QWidget):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
+            
+    def on_music_state_changed(self, is_playing):
+        if self.is_despawning:
+            return
+        self.is_music_playing = is_playing
+
+        if is_playing:
+            self.state_timer.stop()
+            self.move_timer.stop()
+            self.wandering = False
+            self.set_media(SPRITES['concert'])
+        else:
+            self.go_idle()
+
+    def do_music_behavior(self):
+        if not self.is_music_playing or self.is_despawning or self.is_dragging:
+            return
+            
+        weights = [b[2] for b in MUSIC_BEHAVIORS]
+        sprite_key, sound_key, _ = random.choices(MUSIC_BEHAVIORS, weights=weights, k=1)[0]
+        
+        if sprite_key in SPRITES:
+            self.set_media(SPRITES[sprite_key])
+        if sound_key:
+            self.play_sound(sound_key)
+            
+    def set_music_detection(self, enabled):
+        self.music_detection_enabled = bool(enabled)
+        if self.music_detection_enabled:
+            self.music_detector.running = True
+            if not self.music_detector.isRunning():
+                self.music_detector.start()
+        else:
+            self.music_detector.running = False
+            self.music_detector.wait()
+            if self.is_music_playing:
+                self.is_music_playing = False
+                self.go_idle()
 
 
 class SettingsDialog(QDialog):
@@ -819,7 +904,7 @@ class SettingsDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
-        version = QLabel("Version 2.2.0")
+        version = QLabel("Version 2.3.0")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version.setStyleSheet("color: #aaaaaa;")
         layout.addWidget(version)
@@ -830,25 +915,17 @@ class SettingsDialog(QDialog):
         desc.setStyleSheet("color: #cccccc; margin-top: 20px; font-size: 14px;")
         layout.addWidget(desc)
         
-        github_url = "https://github.com/NotHavocc/PinkDesktoppet/releases/latest"
-        
-        link_label = QLabel(f'<a href="{github_url}" style="color: #ff8a90; text-decoration: none;">Check for Updates on GitHub</a>')
-        link_label.setTextFormat(Qt.TextFormat.RichText)
-        link_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        link_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        link_label.setStyleSheet("""
-            QLabel {
-                margin-top: 15px;
-                font-size: 14px;
-                background: transparent;
-            }
-            QLabel:hover {
-                color: #a73c5c;
-                text-decoration: underline;
-            }
-        """)
-        link_label.linkActivated.connect(self.open_github_link)
-        layout.addWidget(link_label)
+        def make_link(text, url):
+            lbl = QLabel(f'<a href="{url}" style="color: #ff8a90; text-decoration: none;">{text}</a>')
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("QLabel { margin-top: 8px; font-size: 14px; background: transparent; } QLabel:hover { color: #4da6ff; text-decoration: underline; }")
+            lbl.linkActivated.connect(self.open_github_link)
+            return lbl
+
+        layout.addWidget(make_link("Check for Updates on GitHub", "https://github.com/NotHavocc/PinkDesktopPet/releases/latest"))
+        layout.addWidget(make_link("My Website", "https://nothavoc.is-a.dev"))
         
         layout.addStretch()
         return page
@@ -919,6 +996,17 @@ class SettingsDialog(QDialog):
         interaction_group.setLayout(interaction_layout)
         layout.addWidget(interaction_group)
         
+        music_group = QGroupBox("Music Reaction")
+        music_layout = QVBoxLayout()
+        self.music_checkbox = QCheckBox("Audio Detection (sing/dance when playing music)")
+        self.music_checkbox.setChecked(True)
+        if parent:
+            self.music_checkbox.setChecked(parent.music_detection_enabled)
+        self.music_checkbox.stateChanged.connect(self.on_music_changed)
+        music_layout.addWidget(self.music_checkbox)
+        music_group.setLayout(music_layout)
+        layout.addWidget(music_group)
+        
         layout.addStretch()
         return page
 
@@ -986,6 +1074,11 @@ class SettingsDialog(QDialog):
         if self.parent():
             self.parent().pixel_scale = float(value)
             self.parent().apply_scale()
+            
+    def on_music_changed(self, state):
+        if self.parent():
+            self.parent().set_music_detection(bool(state))
+            self.parent().save_settings()
 
     def save_and_close(self):
         if self.parent():
@@ -999,6 +1092,7 @@ class AppManager(QObject):
 
     def __init__(self):
         super().__init__()
+        self.settings = QSettings("Pink", "DesktopPet")
         self.pets = []
         self.setup_tray()
 
@@ -1026,6 +1120,10 @@ class AppManager(QObject):
         
         self.pets_menu = tray_menu.addMenu("Active Pets")
         self.pets_menu.aboutToShow.connect(self.update_pets_menu)
+        
+        self.music_action = tray_menu.addAction("Music Detection: ON")
+        self.music_action.triggered.connect(self.toggle_music_detection)
+        self.update_music_action_text()
         
         tray_menu.addSeparator()
         tray_menu.addAction("Close All Pets").triggered.connect(self.close_all_pets)
@@ -1070,6 +1168,138 @@ class AppManager(QObject):
 
     def notify_settings_changed(self):
         self.settings_changed.emit()
+    
+    def toggle_music_detection(self):
+        current = self.settings.value("music_detection_enabled", True, type=bool)
+        self.settings.setValue("music_detection_enabled", not current)
+        self.settings.sync()
+        self.update_music_action_text()
+        self.notify_settings_changed()
+
+    def update_music_action_text(self):
+        on = self.settings.value("music_detection_enabled", True, type=bool)
+        self.music_action.setText("Music Detection: ON" if on else "Music Detection: OFF")
+
+class MacAudioListener:
+    # more complications for macOS, yippie. (sarcasm)
+    # might keep this untested as of now, since idk how many ppl even use this with mac
+
+    def __init__(self):
+        self._ready = False
+        try:
+            path = ctypes.util.find_library('CoreAudio')
+            self.ca = ctypes.cdll.LoadLibrary(
+                path or '/System/Library/Frameworks/CoreAudio.framework/CoreAudio'
+            )
+            self._ready = True
+        except Exception:
+            self._ready = False
+
+    @staticmethod
+    def _cc(s):
+        return (ord(s[0]) << 24) | (ord(s[1]) << 16) | (ord(s[2]) << 8) | ord(s[3])
+
+    class _Addr(ctypes.Structure):
+        _fields_ = [('mSelector', ctypes.c_uint32),
+                    ('mScope',    ctypes.c_uint32),
+                    ('mElement',  ctypes.c_uint32)]
+
+    def is_playing(self):
+        if not self._ready:
+            return False
+        try:
+            glob = self._cc('glob')
+
+            addr = self._Addr(self._cc('dOut'), glob, 0)
+            dev  = ctypes.c_uint32()
+            size = ctypes.c_uint32(4)
+            if self.ca.AudioObjectGetPropertyData(ctypes.c_uint32(0), ctypes.byref(addr),
+                                                  0, None, ctypes.byref(size), ctypes.byref(dev)) != 0:
+                return False
+
+            addr2   = self._Addr(self._cc('rsom'), glob, 0)
+            running = ctypes.c_uint32()
+            size2   = ctypes.c_uint32(4)
+            if self.ca.AudioObjectGetPropertyData(dev, ctypes.byref(addr2),
+                                                  0, None, ctypes.byref(size2), ctypes.byref(running)) != 0:
+                return False
+            return running.value == 1
+        except Exception:
+            return False
+
+class MusicDetectorThread(QThread):
+    music_changed = pyqtSignal(bool)
+
+    def __init__(self):
+        super().__init__()
+        self.running = True
+        self.last_state = False
+        self.mac_listener = MacAudioListener() if platform.system() == "Darwin" else None
+
+    def run(self):
+        yes = no = 0
+        while self.running:
+            try:
+                raw = self.check_music()
+            except Exception:
+                raw = self.last_state
+
+            if raw == self.last_state:
+                yes = no = 0
+            elif raw:
+                yes += 1; no = 0
+                if yes >= 2:
+                    self.last_state = True
+                    self.music_changed.emit(True)
+                    yes = 0
+            else:
+                no += 1; yes = 0
+                if no >= 2:
+                    self.last_state = False
+                    self.music_changed.emit(False)
+                    no = 0
+
+            self.msleep(1000)
+
+    def check_music(self):
+        system = platform.system()
+        if system == "Darwin":
+            return self._check_mac()
+        elif system == "Windows":
+            return self._check_win()
+        return False
+
+    def _check_mac(self):
+        if self.mac_listener and self.mac_listener.is_playing():
+            return True
+
+        for app in ["Spotify", "Music"]:
+            try:
+                script = f'if application "{app}" is running then tell application "{app}" to return player state'
+                result = subprocess.run(['osascript', '-e', script],
+                                        capture_output=True, text=True, timeout=1)
+                if 'playing' in result.stdout.lower():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _check_win(self):
+        ps_script = (
+            "Add-Type -AssemblyName System.Runtime.WindowsRuntime;"
+            "$t = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Foundation, ContentType=WindowsRuntime];"
+            "$m = ([System.WindowsRuntimeSystemExtensions].GetMethods() | ? { $_.Name -eq 'AsTask' -and $_.IsGenericMethod })[0].MakeGenericMethod($t).Invoke($null, @($t::RequestAsync()));"
+            "if ($m.Wait(2000)) { $s = $m.Result.GetCurrentSession(); if ($s) { [int]$s.GetPlaybackInfo().PlaybackStatus } else { -1 } } else { -1 }"
+        )
+        try:
+            result = subprocess.run(
+                ['powershell', '-NoProfile', '-Command', ps_script],
+                capture_output=True, text=True, timeout=4,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            )
+            return result.stdout.strip() == '4'
+        except Exception:
+            return False
 
 
 if __name__ == '__main__':
