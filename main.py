@@ -23,6 +23,12 @@ import ctypes
 import ctypes.util
 import subprocess
 
+# the few lines that make this thing work on linux, i love wayland
+if sys.platform.startswith('linux') and (
+    os.environ.get('WAYLAND_DISPLAY') or os.environ.get('XDG_SESSION_TYPE') == 'wayland'
+):
+    os.environ.setdefault('QT_QPA_PLATFORM', 'xcb')
+
 BASE_DIR = Path(__file__).parent.resolve()
 
 # full list of sprites, append if you put your own additional ones
@@ -904,7 +910,7 @@ class SettingsDialog(QDialog):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
-        version = QLabel("Version 2.3.0")
+        version = QLabel("Version 2.3.1")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version.setStyleSheet("color: #aaaaaa;")
         layout.addWidget(version)

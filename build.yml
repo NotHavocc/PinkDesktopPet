@@ -1,0 +1,80 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"            # push a tag like v1.2.0 -> builds + publishes a release
+  workflow_dispatch:     # "Run workflow" button in the Actions tab (build only, no release)
+
+permissions:
+  contents: write        # needed to create the release and upload assets
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false   # a macOS failure won't cancel the Windows build
+      matrix:
+        include:
+          - os: windows-latest
+            sep: ";"
+            asset: PinkDesktopPet.exe
+          - os: ubuntu-latest
+            sep: ":"
+            asset: PinkDesktopPet-linux
+          - os: macos-latest
+            sep: ":"
+            asset: PinkDesktopPet-macos.zip
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 pyinstaller
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "PinkDesktopPet" \
+            --add-data "audio${{ matrix.sep }}audio" \
+            --add-data "sprites${{ matrix.sep }}sprites" \
+            --icon icon.ico \
+            --hidden-import PyQt6.QtMultimedia \
+            main.py
+
+      - name: Rename / package output
+        shell: bash
+        run: |
+          cd dist
+          case "${{ runner.os }}" in
+            Windows) ls PinkDesktopPet.exe ;;                       # already the right name
+            Linux)   mv PinkDesktopPet PinkDesktopPet-linux && chmod +x PinkDesktopPet-linux ;;
+            macOS)   ditto -c -k --keepParent PinkDesktopPet.app PinkDesktopPet-macos.zip ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
